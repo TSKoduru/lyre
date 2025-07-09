@@ -1,36 +1,73 @@
 'use client';
 
-import { generateCodeVerifier, generateCodeChallenge } from '@/utils/pcke'
-import queryString from 'query-string';
+import { useState } from 'react';
+import {
+  fetchAllLikedTracks,
+  groupTracksByMonth,
+  fetchUserId,
+  findExistingPlaylist,
+  clearPlaylist,
+  createPlaylist,
+  addTracksToPlaylist,
+  sleep,
+} from '@/utils/spotify';
 
-export default function Home() {
-  const login = async () => {
-    const verifier = generateCodeVerifier();
-    const challenge = await generateCodeChallenge(verifier);
+export default function Dashboard() {
+  const [status, setStatus] = useState('Idle');
+  const [started, setStarted] = useState(false);
 
-    localStorage.setItem('pkce_verifier', verifier);
+  const run = async () => {
+    setStarted(true);
+    try {
+      setStatus('Fetching liked tracks...');
+      const tracks = await fetchAllLikedTracks();
 
-    const params = queryString.stringify({
-      client_id: process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!,
-      response_type: 'code',
-      redirect_uri: process.env.NEXT_PUBLIC_REDIRECT_URI!,
-      scope: process.env.NEXT_PUBLIC_SCOPES!,
-      code_challenge_method: 'S256',
-      code_challenge: challenge,
-    });
+      setStatus('Grouping by month...');
+      const grouped = groupTracksByMonth(tracks);
 
-    window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+      setStatus('Getting user ID...');
+      const userId = await fetchUserId();
+
+      for (const [month, monthTracks] of Object.entries(grouped)) {
+        const playlistName = `${month}`;
+        setStatus(`Checking for playlist: ${playlistName}`);
+
+        let playlistId = await findExistingPlaylist(userId, playlistName);
+
+        if (playlistId) {
+          setStatus(`Clearing existing playlist: ${playlistName}`);
+          await clearPlaylist(playlistId);
+        } else {
+          setStatus(`Creating playlist: ${playlistName}`);
+          playlistId = await createPlaylist(userId, playlistName);
+        }
+
+        const uris = monthTracks.map((track: any) => track.uri);
+        setStatus(`Adding ${uris.length} tracks to ${playlistName}`);
+        await addTracksToPlaylist(playlistId, uris);
+
+        await sleep(1000);
+      }
+
+      setStatus('✅ Done! Check your Spotify playlists.');
+    } catch (err) {
+      console.error('❌ Error:', err);
+      setStatus('❌ Something went wrong. See console.');
+    }
   };
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen">
-      <h1 className="text-3xl font-bold mb-4">Spotify History</h1>
-      <button
-        onClick={login}
-        className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700"
-      >
-        Log in with Spotify
-      </button>
-    </main>
+    <div className="p-6 flex flex-col items-start gap-4">
+      <h1 className="text-2xl font-bold">Spotify History Builder</h1>
+      {!started && (
+        <button
+          onClick={run}
+          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+        >
+          Start Creating Playlists
+        </button>
+      )}
+      <p className="text-sm text-gray-700">{status}</p>
+    </div>
   );
 }
